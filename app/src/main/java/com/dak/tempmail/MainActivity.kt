@@ -98,7 +98,7 @@ fun DakApp(store: Store) {
     var loading by remember { mutableStateOf(false) }
     var reader by remember { mutableStateOf<Mail?>(null) }
     
-    // 🌟 نیا ویری ایبل: OTP کو محفوظ کرنے کے لیے
+    // OTP کو محفوظ کرنے کے لیے
     var extractedOtp by remember { mutableStateOf("") }
 
     var gmailInput by remember { mutableStateOf(store.gmail) }
@@ -126,11 +126,11 @@ fun DakApp(store: Store) {
                     val r = withContext(Dispatchers.IO) { ImapClient.fetch(gmail, pass, address) }
                     mails = r
                     
-                    // 🌟 یہاں سے OTP نکالنے کا لاجک شروع ہوتا ہے
+                    // 🌟 OTP نکالنے کا لاجک
                     if (r.isNotEmpty()) {
                         val latestMail = r.first() // سب سے نئی ای میل
-                        val textToSearch = "${latestMail.subject} ${latestMail.intro}"
-                        // Regex سے 4 سے 8 ہندسوں کا کوڈ تلاش کریں
+                        // یہاں intro کی جگہ body کر دیا گیا ہے
+                        val textToSearch = "${latestMail.subject} ${latestMail.body}"
                         val regex = Regex("\\b(\\d{4,8})\\b")
                         val match = regex.find(textToSearch)
                         if (match != null) {
@@ -195,7 +195,7 @@ fun DakApp(store: Store) {
                 ) {
                     Text("Dak Temp Mail", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = Ink)
                     
-                    // 🌟 یہاں OTP دکھانے کا نیا کارڈ ہے
+                    // 🌟 OTP دکھانے کا کارڈ
                     if (extractedOtp.isNotBlank()) {
                         Card(
                             colors = CardDefaults.cardColors(containerColor = SuccessBg),
@@ -451,8 +451,6 @@ private fun Choice(label: String, selected: Boolean, modifier: Modifier, onClick
     }
 }
 
-// 🌟 نیچے والا حصہ بھی مکمل کر دیا گیا ہے
-
 @Composable
 private fun MailRow(m: Mail, onClick: () -> Unit) {
     Card(
@@ -463,16 +461,18 @@ private fun MailRow(m: Mail, onClick: () -> Unit) {
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(m.subject, fontWeight = FontWeight.SemiBold, color = Ink)
-            Text(m.intro, fontSize = 13.sp, color = Muted, maxLines = 2)
+            // یہاں بھی body کر دیا گیا ہے
+            Text(m.body, fontSize = 13.sp, color = Muted, maxLines = 2)
         }
     }
 }
 
 @Composable
 private fun ReaderScreen(m: Mail, onBack: () -> Unit) {
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
+    Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
         Button(onClick = onBack) { Text("← Wapas") }
         Text(m.subject, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 16.dp))
-        Text(m.intro, fontSize = 16.sp, modifier = Modifier.padding(top = 16.dp))
+        // یہاں بھی body کر دیا گیا ہے
+        Text(m.body, fontSize = 16.sp, modifier = Modifier.padding(top = 16.dp))
     }
 }
