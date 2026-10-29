@@ -27,7 +27,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 
-// 🌟 آپ کی API Key
 private const val RAPID_API_KEY = "31ad4a2a42mshde492d6a579a4dep1b77e9jsn743a3a025918"
 private const val API_HOST = "gmailnator.p.rapidapi.com"
 
@@ -46,7 +45,7 @@ class MainActivity : ComponentActivity() {
 fun DakApp() {
     val scope = rememberCoroutineScope()
     val clip = LocalClipboardManager.current
-    val client = OkHttpClient()
+    val client = remember { OkHttpClient() }
     val mediaType = "application/json; charset=utf-8".toMediaType()
 
     var address by remember { mutableStateOf("") }
@@ -63,7 +62,6 @@ fun DakApp() {
 
         scope.launch(Dispatchers.IO) {
             try {
-                // 1. نیا ای میل بنائیں (POST generateSingleEmail)
                 val genReq = Request.Builder()
                     .url("https://$API_HOST/api/generateSingleEmail")
                     .post("{}".toRequestBody(mediaType))
@@ -90,14 +88,12 @@ fun DakApp() {
                     status = "Email ban gayi! OTP ka wait kar rahe hain..."
                 }
 
-                // 2. ان باکس چیک کریں (Loop)
                 var otpFound = false
                 var attempts = 0
-                while (!otpFound && attempts < 40) { // 3 minute tak check karega
-                    delay(5000) // Har 5 second
+                while (!otpFound && attempts < 40) {
+                    delay(5000)
                     attempts++
 
-                    // (A) List Inbox Messages
                     val listReq = Request.Builder()
                         .url("https://$API_HOST/api/listInboxMessages")
                         .post("{\"email\":\"$newEmail\"}".toRequestBody(mediaType))
@@ -109,13 +105,11 @@ fun DakApp() {
                     val listRes = client.newCall(listReq).execute()
                     val listBody = listRes.body?.string() ?: ""
 
-                    // Agar message mil jaye
                     if (listBody.contains("id")) {
                         val msgIdRegex = Regex("\"id\"\\s*:\\s*\"([^\"]+)\"")
                         val msgId = msgIdRegex.find(listBody)?.groupValues?.get(1)
 
                         if (msgId != null) {
-                            // (B) Get Full Message Content
                             val contentReq = Request.Builder()
                                 .url("https://$API_HOST/api/getFullMessageContent?messageId=$msgId")
                                 .get()
@@ -126,7 +120,6 @@ fun DakApp() {
                             val contentRes = client.newCall(contentReq).execute()
                             val contentBody = contentRes.body?.string() ?: ""
 
-                            // (C) Regex se OTP nikalein
                             val otpRegex = Regex("\\b(\\d{4,8})\\b")
                             val match = otpRegex.find(contentBody)
 
@@ -151,7 +144,7 @@ fun DakApp() {
 
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    status = "Network Error: ${e.message}"
+                    status = "Error: ${e.message}"
                     loading = false
                 }
             }
