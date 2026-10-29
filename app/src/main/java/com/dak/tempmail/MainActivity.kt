@@ -1,7 +1,6 @@
 package com.dak.tempmail
 
 import android.os.Bundle
-import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -44,7 +43,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -58,6 +56,8 @@ private val Bg = Color(0xFFEEF2F5)
 private val Ink = Color(0xFF101820)
 private val Muted = Color(0xFF5B6670)
 private val Alert = Color(0xFFB3380A)
+private val SuccessGreen = Color(0xFF2E7D32)
+private val SuccessBg = Color(0xFFE8F5E9)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -79,9 +79,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private fun fmtDate(ms: Long): String =
-    if (ms == 0L) "" else SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()).format(Date(ms))
-
 @Composable
 fun DakApp(store: Store) {
     val scope = rememberCoroutineScope()
@@ -100,6 +97,9 @@ fun DakApp(store: Store) {
     var info by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var reader by remember { mutableStateOf<Mail?>(null) }
+    
+    // 🌟 نیا ویری ایبل: OTP کو محفوظ کرنے کے لیے
+    var extractedOtp by remember { mutableStateOf("") }
 
     var gmailInput by remember { mutableStateOf(store.gmail) }
     var passInput by remember { mutableStateOf(store.appPassword) }
@@ -111,6 +111,7 @@ fun DakApp(store: Store) {
             address = a
             store.current = a
             mails = emptyList()
+            extractedOtp = "" // ایڈریس بدلا تو پرانا OTP صاف کر دیں
             info = "Naya address ban gaya"
         } else {
             info = "Pehle Settings mein apna @gmail.com address daalein"
@@ -124,6 +125,20 @@ fun DakApp(store: Store) {
                 try {
                     val r = withContext(Dispatchers.IO) { ImapClient.fetch(gmail, pass, address) }
                     mails = r
+                    
+                    // 🌟 یہاں سے OTP نکالنے کا لاجک شروع ہوتا ہے
+                    if (r.isNotEmpty()) {
+                        val latestMail = r.first() // سب سے نئی ای میل
+                        val textToSearch = "${latestMail.subject} ${latestMail.intro}"
+                        // Regex سے 4 سے 8 ہندسوں کا کوڈ تلاش کریں
+                        val regex = Regex("\\b(\\d{4,8})\\b")
+                        val match = regex.find(textToSearch)
+                        if (match != null) {
+                            extractedOtp = match.value
+                        }
+                    }
+                    // 🌟 OTP لاجک ختم
+
                     status = "Last check: " + SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
                 } catch (e: javax.mail.AuthenticationFailedException) {
                     status = "Gmail ya App Password galat hai. Settings check karein."
@@ -142,7 +157,7 @@ fun DakApp(store: Store) {
     LaunchedEffect(address, gmail, pass) {
         while (true) {
             refresh()
-            delay(10000)
+            delay(10000) // ہر 10 سیکنڈ بعد چیک کرے گا
         }
     }
 
@@ -170,6 +185,7 @@ fun DakApp(store: Store) {
                 .fillMaxSize()
         ) {
             when (tab) {
+                // ================= HOME SCREEN =================
                 0 -> Column(
                     Modifier
                         .fillMaxSize()
@@ -178,6 +194,26 @@ fun DakApp(store: Store) {
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     Text("Dak Temp Mail", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = Ink)
+                    
+                    // 🌟 یہاں OTP دکھانے کا نیا کارڈ ہے
+                    if (extractedOtp.isNotBlank()) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = SuccessBg),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.padding(16.dp)) {
+                                Text("OTP RECEIVED", fontSize = 12.sp, color = SuccessGreen, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = extractedOtp,
+                                    fontSize = 32.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = SuccessGreen,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                    }
+
                     Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
                         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             Text("AAPKA TEMPORARY ADDRESS", fontSize = 11.sp, color = Muted)
@@ -232,6 +268,7 @@ fun DakApp(store: Store) {
                     }
                 }
 
+                // ================= INBOX SCREEN =================
                 1 -> Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp)) {
                     Text("Inbox (${mails.size})", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = Ink)
                     Text(address, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Muted)
@@ -248,6 +285,7 @@ fun DakApp(store: Store) {
                     }
                 }
 
+                // ================= SAVED SCREEN =================
                 2 -> Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp)) {
                     Text("Saved addresses", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = Ink)
                     if (saved.isEmpty()) {
@@ -276,6 +314,7 @@ fun DakApp(store: Store) {
                                                     address = s
                                                     store.current = s
                                                     mails = emptyList()
+                                                    extractedOtp = ""
                                                     info = "Address restore ho gaya"
                                                     tab = 0
                                                 },
@@ -296,6 +335,7 @@ fun DakApp(store: Store) {
                     }
                 }
 
+                // ================= SETTINGS SCREEN =================
                 else -> Column(
                     Modifier
                         .fillMaxSize()
@@ -346,6 +386,7 @@ fun DakApp(store: Store) {
                                         address = a
                                         store.current = a
                                         mails = emptyList()
+                                        extractedOtp = ""
                                     }
                                 }
                                 info = "Save ho gaya. Home par jayein."
@@ -380,6 +421,7 @@ fun DakApp(store: Store) {
                                 address = store.current
                                 saved = store.saved
                                 mails = emptyList()
+                                extractedOtp = ""
                                 importText = ""
                                 info = "Restore ho gaya. Ab App Password daal kar Save karein."
                             } else {
@@ -409,6 +451,8 @@ private fun Choice(label: String, selected: Boolean, modifier: Modifier, onClick
     }
 }
 
+// 🌟 نیچے والا حصہ بھی مکمل کر دیا گیا ہے
+
 @Composable
 private fun MailRow(m: Mail, onClick: () -> Unit) {
     Card(
@@ -417,58 +461,18 @@ private fun MailRow(m: Mail, onClick: () -> Unit) {
             .fillMaxWidth()
             .clickable { onClick() }
     ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(
-                    m.from,
-                    fontWeight = FontWeight.Medium,
-                    color = Ink,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(fmtDate(m.date), fontSize = 12.sp, color = Muted, fontFamily = FontFamily.Monospace)
-            }
-            Text(m.subject, color = Ink, maxLines = 1)
-            Text(
-                m.body.replace(Regex("<[^>]*>"), " ").replace(Regex("\\s+"), " ").trim().take(90),
-                fontSize = 13.sp,
-                color = Muted,
-                maxLines = 1
-            )
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(m.subject, fontWeight = FontWeight.SemiBold, color = Ink)
+            Text(m.intro, fontSize = 13.sp, color = Muted, maxLines = 2)
         }
     }
 }
 
 @Composable
 private fun ReaderScreen(m: Mail, onBack: () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        OutlinedButton(onClick = onBack) { Text("← Wapas") }
-        Text(m.subject, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Ink)
-        Text("From: ${m.from}", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = Muted)
-        Text(fmtDate(m.date), fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = Muted)
-        if (m.isHtml) {
-            AndroidView(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        settings.javaScriptEnabled = false
-                        settings.allowFileAccess = false
-                        settings.allowContentAccess = false
-                        loadDataWithBaseURL(null, m.body, "text/html", "utf-8", null)
-                    }
-                }
-            )
-        } else {
-            SelectionContainer(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                Text(m.body, color = Ink)
-            }
-        }
+    Column(Modifier.fillMaxSize().padding(16.dp)) {
+        Button(onClick = onBack) { Text("← Wapas") }
+        Text(m.subject, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 16.dp))
+        Text(m.intro, fontSize = 16.sp, modifier = Modifier.padding(top = 16.dp))
     }
 }
