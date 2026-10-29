@@ -63,7 +63,7 @@ fun DakApp() {
         scope.launch(Dispatchers.IO) {
             try {
                 val genReq = Request.Builder()
-                    .url("https://$API_HOST/api/generateSingleEmail")
+                    .url("https://$API_HOST/api/emails/generate")
                     .post("{}".toRequestBody(mediaType))
                     .addHeader("content-type", "application/json")
                     .addHeader("X-RapidAPI-Key", RAPID_API_KEY)
