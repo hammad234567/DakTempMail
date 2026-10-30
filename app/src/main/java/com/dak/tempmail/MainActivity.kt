@@ -60,14 +60,9 @@ private class DomainOpt(val key: String, val title: String, val desc: String)
 
 // Domain options. If the API uses different names, only this list needs to change.
 private val DOMAIN_OPTS = listOf(
-    DomainOpt("private_email_domain", "Private Domain", "Private custom domain"),
-    DomainOpt("private_plusgmail", "Private Gmail Plus", "Private Gmail with plus(+)"),
-    DomainOpt("private_dotgmail", "Private Gmail Dot", "Private Gmail with dot(.)"),
-    DomainOpt("private_googlemail", "Private Google Mail", "Private @googlemail.com"),
-    DomainOpt("public_domain", "Public Domain", "Public custom domain"),
-    DomainOpt("public_plusgmail", "Gmail Plus", "Gmail with plus(+) variations"),
-    DomainOpt("public_dotgmail", "Gmail Dot", "Gmail with dot(.) variations"),
-    DomainOpt("public_googlemail", "Google Mail", "Googlemail variations")
+    DomainOpt("public_googlemail", "Google Mail", "Googlemail variations (@googlemail.com)"),
+    DomainOpt("public_dotgmail", "Gmail Dot", "Gmail with dot(.) variations (@gmail.com)"),
+    DomainOpt("public_plusgmail", "Gmail Plus", "Gmail with plus(+) variations (@gmail.com)")
 )
 
 private fun call(method: String, path: String, json: String?): ApiResult {
@@ -191,9 +186,12 @@ private fun textOf(raw: String): String {
     }
 }
 
-private fun otpIn(s: String): String {
-    val m = Regex("(?<!\\d)(\\d{4,8})(?!\\d)").find(s)
-    return m?.groupValues?.get(1) ?: ""
+private fun otpIn(s: String, loose: Boolean = false): String {
+    val kw = Regex("(?i)(?:code|otp|pin|passcode|verification|verify)\\D{0,40}(?<!\\d)(\\d{4,8})(?!\\d)").find(s)
+    if (kw != null) return kw.groupValues[1]
+    if (!loose) return ""
+    val six = Regex("(?<!\\d)(\\d{6})(?!\\d)").find(s)
+    return six?.groupValues?.get(1) ?: ""
 }
 
 private fun pathId(id: String): String {
@@ -273,6 +271,7 @@ fun DakApp(prefs: SharedPreferences) {
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var restoreInput by remember { mutableStateOf("") }
+    var loadingMail by remember { mutableStateOf(false) }
     var showDomains by remember { mutableStateOf(false) }
     var sel by remember { mutableStateOf(setOf<String>()) }
 
@@ -357,6 +356,7 @@ fun DakApp(prefs: SharedPreferences) {
     val openMsg: (Msg) -> Unit = { m ->
         opened = m
         openedText = textOf(m.raw)
+        loadingMail = true
         scope.launch {
             try {
                 val r = withContext(Dispatchers.IO) { call("GET", INBOX_PATH + "/" + pathId(m.id), null) }
@@ -364,14 +364,13 @@ fun DakApp(prefs: SharedPreferences) {
                     var t = textOf(r.body)
                     if (t.isBlank()) t = r.body.take(1500)
                     openedText = t
-                    val code = otpIn(t)
-                    if (code.isNotBlank()) otp = code
                 } else {
                     status = "Could not open mail, error " + r.code + ": " + short(r.body)
                 }
             } catch (e: Exception) {
                 status = "Error: " + (e.message ?: e.javaClass.simpleName)
             }
+            loadingMail = false
         }
     }
 
@@ -519,74 +518,18 @@ fun DakApp(prefs: SharedPreferences) {
                         enabled = !busy,
                         modifier = Modifier.fillMaxWidth()
                     ) { Text(if (busy) "Please wait..." else "Generate New Email") }
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        TextButton(onClick = {
+                    OutlinedButton(
+                        onClick = {
                             if (address.isNotBlank() && !saved.contains(address)) {
                                 saved = saved + address
                                 saveList(prefs, "saved", saved)
                                 status = "Saved"
                             }
-                        }, enabled = address.isNotBlank()) { Text("Save Email") }
-                        TextButton(onClick = { tab = 2 }) { Text("Restore Email") }
-                    }
-                    if (status.isNotBlank()) {
-                        Text(status, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Muted)
-                    }
-                }
-
-                1 -> {
-                    Text("Inbox", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
-                    Text(address.ifBlank { "No address yet" }, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Muted)
-                    if (otp.isNotBlank()) {
-                        OtpCard(otp) { clip.setText(AnnotatedString(otp)); status = "OTP copied" }
-                    }
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("${msgs.size} messages", fontWeight = FontWeight.SemiBold)
-                        OutlinedButton(onClick = refresh) { Text(if (busy) "..." else "Reload") }
-                    }
-                    if (msgs.isEmpty()) {
-                        Text("No mail yet for this address. Checks every 15 seconds.", color = Muted)
-                    }
-                    msgs.forEach { m ->
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = Color.White),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { openMsg(m) }
-                        ) {
-                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(m.subject, fontWeight = FontWeight.Medium, maxLines = 1)
-                                Text(m.from, fontSize = 13.sp, color = Muted, maxLines = 1)
-                            }
-                        }
-                    }
-                    val o = opened
-                    if (o != null) {
-                        Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(o.subject, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                                Text("From: " + o.from, fontSize = 12.sp, color = Muted, fontFamily = FontFamily.Monospace)
-                                SelectionContainer {
-                                    Text(openedText.ifBlank { "(No text found in this mail)" })
-                                }
-                                OutlinedButton(onClick = { opened = null }) { Text("Close") }
-                            }
-                        }
-                    }
-                    if (status.isNotBlank()) {
-                        Text(status, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Muted)
-                    }
-                }
-
-                else -> {
-                    Text("Switch Email", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
+                        },
+                        enabled = address.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Save Email") }
+                    Text("Restore Email", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                     OutlinedTextField(
                         value = restoreInput,
                         onValueChange = { restoreInput = it },
@@ -606,6 +549,72 @@ fun DakApp(prefs: SharedPreferences) {
                         enabled = restoreInput.contains("@"),
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("Restore Email") }
+                    if (status.isNotBlank()) {
+                        Text(status, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Muted)
+                    }
+                }
+
+                1 -> {
+                    val o = opened
+                    if (o != null) {
+                        OutlinedButton(onClick = { opened = null }) { Text("< Back to Inbox") }
+                        Text(o.subject, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        Text("From: " + o.from, fontSize = 12.sp, color = Muted, fontFamily = FontFamily.Monospace)
+                        val mailOtp = otpIn(openedText, true)
+                        if (mailOtp.isNotBlank()) {
+                            OtpCard(mailOtp) { clip.setText(AnnotatedString(mailOtp)); status = "OTP copied" }
+                        }
+                        Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                            Box(Modifier.fillMaxWidth().padding(16.dp)) {
+                                SelectionContainer {
+                                    Text(
+                                        if (loadingMail) "Loading mail..."
+                                        else openedText.ifBlank { "(No text found in this mail)" }
+                                    )
+                                }
+                            }
+                        }
+                        if (status.isNotBlank()) {
+                            Text(status, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Muted)
+                        }
+                    } else {
+                        Text("Inbox", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
+                        Text(address.ifBlank { "No address yet" }, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Muted)
+                        if (otp.isNotBlank()) {
+                            OtpCard(otp) { clip.setText(AnnotatedString(otp)); status = "OTP copied" }
+                        }
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("${msgs.size} messages", fontWeight = FontWeight.SemiBold)
+                            OutlinedButton(onClick = refresh) { Text(if (busy) "..." else "Reload") }
+                        }
+                        if (msgs.isEmpty()) {
+                            Text("No mail yet for this address. Checks every 15 seconds.", color = Muted)
+                        }
+                        msgs.forEach { m ->
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { openMsg(m) }
+                            ) {
+                                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(m.subject, fontWeight = FontWeight.Medium, maxLines = 1)
+                                    Text(m.from, fontSize = 13.sp, color = Muted, maxLines = 1)
+                                }
+                            }
+                        }
+                        if (status.isNotBlank()) {
+                            Text(status, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Muted)
+                        }
+                    }
+                }
+
+                else -> {
+                    Text("Switch Email", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
                     Text("Saved", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                     if (saved.isEmpty()) Text("No saved addresses. Tap Save Email on the Email tab.", color = Muted)
                     saved.forEach { a ->
