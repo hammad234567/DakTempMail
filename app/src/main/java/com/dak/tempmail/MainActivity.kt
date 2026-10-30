@@ -40,9 +40,9 @@ import java.util.Locale
 // ---------- RapidAPI (Gmailnator) ----------
 private const val HOST = "gmailnator.p.rapidapi.com"
 private const val GENERATE_PATH = "/api/emails/generate"
+private const val API_KEY = "31ad4a2a42mshde492d6a579a4dep1b77e9jsn743a3a025918"
 
-// Inbox ke URLs abhi pakke nahi hain, isliye app inhe baari baari try karti hai
-// aur jo chal jaye use yaad rakhti hai.
+// The inbox URLs are not confirmed, so the app tries each one and remembers the one that works.
 private val LIST_PATHS = listOf(
     "/api/emails/inbox",
     "/api/inbox",
@@ -163,7 +163,7 @@ private fun plain(s: String): String {
     }
 }
 
-/** JSON ke andar se mail ka text nikalta hai (id wagera nahi). */
+/** Extracts the readable text from a JSON mail (not the ids). */
 private fun textOf(raw: String): String {
     return try {
         val o = JSONObject(raw)
@@ -224,7 +224,7 @@ private fun AddrRow(address: String, current: Boolean, onUse: () -> Unit, onDele
                 color = if (current) Color(0xFF1677FF) else Color(0xFF101820)
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onUse, modifier = Modifier.weight(1f)) { Text("Use karo") }
+                Button(onClick = onUse, modifier = Modifier.weight(1f)) { Text("Use") }
                 if (onDelete != null) {
                     OutlinedButton(onClick = onDelete, modifier = Modifier.weight(1f)) { Text("Delete") }
                 }
@@ -238,8 +238,7 @@ fun DakApp(prefs: SharedPreferences) {
     val scope = rememberCoroutineScope()
     val clip = LocalClipboardManager.current
 
-    var key by remember { mutableStateOf(prefs.getString("key", "") ?: "") }
-    var keyInput by remember { mutableStateOf("") }
+    val key = API_KEY
     var address by remember { mutableStateOf(prefs.getString("addr", "") ?: "") }
     var history by remember { mutableStateOf(loadList(prefs, "history")) }
     var saved by remember { mutableStateOf(loadList(prefs, "saved")) }
@@ -267,16 +266,16 @@ fun DakApp(prefs: SharedPreferences) {
         if (!busy && key.isNotBlank()) {
             scope.launch {
                 busy = true
-                status = "Naya address ban raha hai..."
+                status = "Generating new address..."
                 try {
                     val r = withContext(Dispatchers.IO) { call(key, "POST", GENERATE_PATH, "{}") }
                     if (r.code == 200) {
                         val email = JSONObject(r.body).optString("email", "")
                         if (email.isNotBlank()) {
                             useAddress(email)
-                            status = "Naya address ban gaya"
+                            status = "New address created"
                         } else {
-                            status = "Jawab mein email nahi mila: " + short(r.body)
+                            status = "No email in response: " + short(r.body)
                         }
                     } else {
                         status = "Generate error " + r.code + ": " + short(r.body)
@@ -345,7 +344,7 @@ fun DakApp(prefs: SharedPreferences) {
                     val code = otpIn(t)
                     if (code.isNotBlank()) otp = code
                 } else {
-                    status = "Mail kholne mein error " + r.code + ": " + short(r.body)
+                    status = "Could not open mail, error " + r.code + ": " + short(r.body)
                 }
             } catch (e: Exception) {
                 status = "Error: " + (e.message ?: e.javaClass.simpleName)
@@ -369,43 +368,10 @@ fun DakApp(prefs: SharedPreferences) {
     ) {
         Text("Dak Temp Mail", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
 
-        if (key.isBlank()) {
-            Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("RapidAPI key daalein (sirf ek baar)", fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "Key sirf aapke phone mein save hoti hai, code mein nahi.",
-                        fontSize = 12.sp,
-                        color = Color.Gray
-                    )
-                    OutlinedTextField(
-                        value = keyInput,
-                        onValueChange = { keyInput = it },
-                        label = { Text("X-RapidAPI-Key") },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Button(
-                        onClick = {
-                            val k = keyInput.trim()
-                            if (k.length > 10) {
-                                key = k
-                                prefs.edit().putString("key", k).apply()
-                                keyInput = ""
-                                status = "Key save ho gayi. Generate dabayein."
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("Key save karo") }
-                }
-            }
-        }
-
         if (otp.isNotBlank()) {
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9))) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("OTP MIL GAYA", fontSize = 12.sp, color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold)
+                    Text("OTP RECEIVED", fontSize = 12.sp, color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold)
                     Text(
                         otp,
                         fontSize = 34.sp,
@@ -413,8 +379,8 @@ fun DakApp(prefs: SharedPreferences) {
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF2E7D32)
                     )
-                    OutlinedButton(onClick = { clip.setText(AnnotatedString(otp)); status = "OTP copy ho gaya" }) {
-                        Text("OTP copy karo")
+                    OutlinedButton(onClick = { clip.setText(AnnotatedString(otp)); status = "OTP copied" }) {
+                        Text("Copy OTP")
                     }
                 }
             }
@@ -422,10 +388,10 @@ fun DakApp(prefs: SharedPreferences) {
 
         Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("AAPKA ADDRESS", fontSize = 11.sp, color = Color.Gray)
+                Text("YOUR ADDRESS", fontSize = 11.sp, color = Color.Gray)
                 SelectionContainer {
                     Text(
-                        if (address.isBlank()) "Generate New Address dabayein" else address,
+                        if (address.isBlank()) "Tap Generate New Address" else address,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Medium,
                         fontSize = 18.sp
@@ -435,26 +401,26 @@ fun DakApp(prefs: SharedPreferences) {
                     onClick = generate,
                     enabled = !busy && key.isNotBlank(),
                     modifier = Modifier.fillMaxWidth()
-                ) { Text(if (busy) "Wait..." else "Generate New Address") }
+                ) { Text(if (busy) "Please wait..." else "Generate New Address") }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
-                        onClick = { clip.setText(AnnotatedString(address)); status = "Copy ho gaya" },
+                        onClick = { clip.setText(AnnotatedString(address)); status = "Copied" },
                         enabled = address.isNotBlank(),
                         modifier = Modifier.weight(1f)
-                    ) { Text("Copy", fontSize = 13.sp) }
+                    ) { Text("Copy", fontSize = 12.sp, maxLines = 1) }
                     OutlinedButton(
                         onClick = {
                             if (address.isNotBlank() && !saved.contains(address)) {
                                 saved = saved + address
                                 saveList(prefs, "saved", saved)
-                                status = "Save ho gaya"
+                                status = "Saved"
                             }
                         },
                         enabled = address.isNotBlank(),
                         modifier = Modifier.weight(1f)
-                    ) { Text("Save", fontSize = 13.sp) }
-                    OutlinedButton(onClick = { tab = 2 }, modifier = Modifier.weight(1f)) {
-                        Text("Restore", fontSize = 13.sp)
+                    ) { Text("Save", fontSize = 12.sp, maxLines = 1) }
+                    OutlinedButton(onClick = { tab = 2 }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp)) {
+                        Text("Restore", fontSize = 12.sp, maxLines = 1)
                     }
                 }
                 if (status.isNotBlank()) {
@@ -481,7 +447,7 @@ fun DakApp(prefs: SharedPreferences) {
                 }
                 if (msgs.isEmpty()) {
                     Text(
-                        "Abhi is address par koi mail nahi aayi. Har 15 second mein check hota hai.",
+                        "No mail yet for this address. Checks every 15 seconds.",
                         color = Color.Gray
                     )
                 }
@@ -505,16 +471,16 @@ fun DakApp(prefs: SharedPreferences) {
                             Text(o.subject, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                             Text("From: " + o.from, fontSize = 12.sp, color = Color.Gray, fontFamily = FontFamily.Monospace)
                             SelectionContainer {
-                                Text(openedText.ifBlank { "(Is mail ka text nahi mila)" })
+                                Text(openedText.ifBlank { "(No text found in this mail)" })
                             }
-                            OutlinedButton(onClick = { opened = null }) { Text("Band karo") }
+                            OutlinedButton(onClick = { opened = null }) { Text("Close") }
                         }
                     }
                 }
             }
 
             1 -> {
-                if (history.isEmpty()) Text("Abhi koi history nahi hai.", color = Color.Gray)
+                if (history.isEmpty()) Text("No history yet.", color = Color.Gray)
                 history.forEach { a ->
                     AddrRow(a, a == address, { useAddress(a) }, null)
                 }
@@ -524,7 +490,7 @@ fun DakApp(prefs: SharedPreferences) {
                 OutlinedTextField(
                     value = restoreInput,
                     onValueChange = { restoreInput = it },
-                    label = { Text("Purana address yahan paste karein") },
+                    label = { Text("Paste an old address here") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -534,13 +500,13 @@ fun DakApp(prefs: SharedPreferences) {
                         if (a.contains("@")) {
                             useAddress(a)
                             restoreInput = ""
-                            status = "Address restore ho gaya"
+                            status = "Address restored"
                         }
                     },
                     enabled = restoreInput.contains("@"),
                     modifier = Modifier.fillMaxWidth()
-                ) { Text("Restore karo") }
-                if (saved.isEmpty()) Text("Koi saved address nahi. Upar \"Save\" dabayein.", color = Color.Gray)
+                ) { Text("Restore") }
+                if (saved.isEmpty()) Text("No saved addresses. Tap Save above.", color = Color.Gray)
                 saved.forEach { a ->
                     AddrRow(a, a == address, { useAddress(a) }, {
                         saved = saved.filter { it != a }
