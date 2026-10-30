@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.text.Html
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -19,6 +20,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -39,34 +41,40 @@ import java.util.Locale
 // ---------- RapidAPI (Gmailnator) ----------
 private const val HOST = "gmailnator.p.rapidapi.com"
 private const val GENERATE_PATH = "/api/emails/generate"
+private const val INBOX_PATH = "/api/inbox"
 private const val API_KEY = "31ad4a2a42mshde492d6a579a4dep1b77e9jsn743a3a025918"
 
-// The inbox URLs are not confirmed, so the app tries each one and remembers the one that works.
-private val LIST_PATHS = listOf(
-    "/api/emails/inbox",
-    "/api/inbox",
-    "/api/emails/messages",
-    "/api/messages",
-    "/api/emails/list"
-)
-private val CONTENT_BASES = listOf(
-    "/api/emails/message",
-    "/api/message",
-    "/api/emails/content"
-)
+// Inbox list URL: tries these in order and remembers the one that works.
+private val LIST_PATHS = listOf("/api/inbox", "/api/emails/inbox")
+
+private val Blue = Color(0xFF1677FF)
+private val Ink = Color(0xFF101820)
+private val Muted = Color(0xFF5B6670)
 
 private val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
 private val http = OkHttpClient()
 
 private class ApiResult(val code: Int, val body: String)
-private class Cand(val method: String, val path: String, val body: String?)
 private class Msg(val id: String, val subject: String, val from: String, val raw: String)
+private class DomainOpt(val key: String, val title: String, val desc: String)
 
-private fun call(key: String, method: String, path: String, json: String?): ApiResult {
+// Domain options. If the API uses different names, only this list needs to change.
+private val DOMAIN_OPTS = listOf(
+    DomainOpt("private_email_domain", "Private Domain", "Private custom domain"),
+    DomainOpt("private_plusgmail", "Private Gmail Plus", "Private Gmail with plus(+)"),
+    DomainOpt("private_dotgmail", "Private Gmail Dot", "Private Gmail with dot(.)"),
+    DomainOpt("private_googlemail", "Private Google Mail", "Private @googlemail.com"),
+    DomainOpt("public_domain", "Public Domain", "Public custom domain"),
+    DomainOpt("public_plusgmail", "Gmail Plus", "Gmail with plus(+) variations"),
+    DomainOpt("public_dotgmail", "Gmail Dot", "Gmail with dot(.) variations"),
+    DomainOpt("public_googlemail", "Google Mail", "Googlemail variations")
+)
+
+private fun call(method: String, path: String, json: String?): ApiResult {
     val b = Request.Builder()
         .url("https://$HOST$path")
         .addHeader("x-rapidapi-host", HOST)
-        .addHeader("x-rapidapi-key", key)
+        .addHeader("x-rapidapi-key", API_KEY)
         .addHeader("accept", "application/json")
     if (method == "POST") {
         b.addHeader("content-type", "application/json")
@@ -79,24 +87,29 @@ private fun call(key: String, method: String, path: String, json: String?): ApiR
     }
 }
 
-private fun firstWorking(key: String, cands: List<Cand>, prefs: SharedPreferences, cacheKey: String): ApiResult {
-    val cached = prefs.getInt(cacheKey, -1)
-    val order = if (cached in cands.indices) {
-        listOf(cached) + cands.indices.filter { it != cached }
+private fun listInbox(prefs: SharedPreferences, address: String): ApiResult {
+    val body = JSONObject().put("email", address).toString()
+    val cached = prefs.getInt("listIdx2", -1)
+    val order = if (cached in LIST_PATHS.indices) {
+        listOf(cached) + LIST_PATHS.indices.filter { it != cached }
     } else {
-        cands.indices.toList()
+        LIST_PATHS.indices.toList()
     }
     var last = ApiResult(0, "")
     for (i in order) {
-        val c = cands[i]
-        val r = call(key, c.method, c.path, c.body)
+        val r = call("POST", LIST_PATHS[i], body)
         last = r
         if (r.code != 404 && r.code != 405) {
-            if (r.code in 200..299) prefs.edit().putInt(cacheKey, i).apply()
+            if (r.code in 200..299) prefs.edit().putInt("listIdx2", i).apply()
             return r
         }
     }
     return last
+}
+
+private fun optionsBody(picked: List<String>): String {
+    if (picked.isEmpty()) return "{}"
+    return JSONObject().put("options", JSONArray(picked)).toString()
 }
 
 // ---------- helpers ----------
@@ -183,6 +196,10 @@ private fun otpIn(s: String): String {
     return m?.groupValues?.get(1) ?: ""
 }
 
+private fun pathId(id: String): String {
+    return if (Regex("[A-Za-z0-9_=.-]+").matches(id)) id else URLEncoder.encode(id, "UTF-8")
+}
+
 // ---------- UI ----------
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -191,7 +208,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(
                 colorScheme = lightColorScheme(
-                    primary = Color(0xFF1677FF),
+                    primary = Blue,
                     onPrimary = Color.White,
                     background = Color(0xFFF6F8FB),
                     surface = Color.White
@@ -204,11 +221,19 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun TabButton(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    if (selected) {
-        Button(onClick = onClick, modifier = modifier) { Text(label, fontSize = 13.sp) }
-    } else {
-        OutlinedButton(onClick = onClick, modifier = modifier) { Text(label, fontSize = 13.sp) }
+private fun OtpCard(otp: String, onCopy: () -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9))) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("OTP RECEIVED", fontSize = 12.sp, color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold)
+            Text(
+                otp,
+                fontSize = 34.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF2E7D32)
+            )
+            OutlinedButton(onClick = onCopy) { Text("Copy OTP") }
+        }
     }
 }
 
@@ -220,7 +245,7 @@ private fun AddrRow(address: String, current: Boolean, onUse: () -> Unit, onDele
                 address,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Medium,
-                color = if (current) Color(0xFF1677FF) else Color(0xFF101820)
+                color = if (current) Blue else Ink
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onUse, modifier = Modifier.weight(1f)) { Text("Use") }
@@ -237,7 +262,6 @@ fun DakApp(prefs: SharedPreferences) {
     val scope = rememberCoroutineScope()
     val clip = LocalClipboardManager.current
 
-    val key = API_KEY
     var address by remember { mutableStateOf(prefs.getString("addr", "") ?: "") }
     var history by remember { mutableStateOf(loadList(prefs, "history")) }
     var saved by remember { mutableStateOf(loadList(prefs, "saved")) }
@@ -249,6 +273,8 @@ fun DakApp(prefs: SharedPreferences) {
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var restoreInput by remember { mutableStateOf("") }
+    var showDomains by remember { mutableStateOf(false) }
+    var sel by remember { mutableStateOf(setOf<String>()) }
 
     val useAddress: (String) -> Unit = { a ->
         address = a
@@ -261,18 +287,24 @@ fun DakApp(prefs: SharedPreferences) {
         tab = 0
     }
 
-    val generate: () -> Unit = {
-        if (!busy && key.isNotBlank()) {
+    val generate: (List<String>) -> Unit = { picked ->
+        if (!busy) {
             scope.launch {
                 busy = true
                 status = "Generating new address..."
                 try {
-                    val r = withContext(Dispatchers.IO) { call(key, "POST", GENERATE_PATH, "{}") }
+                    var note = ""
+                    var r = withContext(Dispatchers.IO) { call("POST", GENERATE_PATH, optionsBody(picked)) }
+                    if (r.code != 200 && picked.isNotEmpty()) {
+                        r = withContext(Dispatchers.IO) { call("POST", GENERATE_PATH, "{}") }
+                        note = " (the API did not accept the domain choice)"
+                    }
                     if (r.code == 200) {
-                        val email = JSONObject(r.body).optString("email", "")
+                        val o = JSONObject(r.body)
+                        val email = o.optString("email", "")
                         if (email.isNotBlank()) {
                             useAddress(email)
-                            status = "New address created"
+                            status = "New address created, type: " + o.optString("type", "?") + note
                         } else {
                             status = "No email in response: " + short(r.body)
                         }
@@ -288,13 +320,11 @@ fun DakApp(prefs: SharedPreferences) {
     }
 
     val refresh: () -> Unit = {
-        if (!busy && key.isNotBlank() && address.isNotBlank()) {
+        if (!busy && address.isNotBlank()) {
             scope.launch {
                 busy = true
                 try {
-                    val body = JSONObject().put("email", address).toString()
-                    val cands = LIST_PATHS.map { Cand("POST", it, body) }
-                    val r = withContext(Dispatchers.IO) { firstWorking(key, cands, prefs, "listIdx") }
+                    val r = withContext(Dispatchers.IO) { listInbox(prefs, address) }
                     if (r.code in 200..299) {
                         val arr = findArray(r.body)
                         val list = ArrayList<Msg>()
@@ -329,17 +359,11 @@ fun DakApp(prefs: SharedPreferences) {
         openedText = textOf(m.raw)
         scope.launch {
             try {
-                val enc = URLEncoder.encode(m.id, "UTF-8")
-                val cands = ArrayList<Cand>()
-                for (b in CONTENT_BASES) {
-                    cands.add(Cand("GET", "$b?messageId=$enc", null))
-                    cands.add(Cand("GET", "$b?id=$enc", null))
-                    cands.add(Cand("GET", "$b/$enc", null))
-                }
-                val r = withContext(Dispatchers.IO) { firstWorking(key, cands, prefs, "contIdx") }
+                val r = withContext(Dispatchers.IO) { call("GET", INBOX_PATH + "/" + pathId(m.id), null) }
                 if (r.code in 200..299) {
-                    val t = textOf(r.body)
-                    if (t.isNotBlank()) openedText = t
+                    var t = textOf(r.body)
+                    if (t.isBlank()) t = r.body.take(1500)
+                    openedText = t
                     val code = otpIn(t)
                     if (code.isNotBlank()) otp = code
                 } else {
@@ -351,166 +375,250 @@ fun DakApp(prefs: SharedPreferences) {
         }
     }
 
-    LaunchedEffect(address, key) {
+    LaunchedEffect(address) {
         while (true) {
             refresh()
             delay(15000)
         }
     }
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Text("Dak Temp Mail", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
-
-        if (otp.isNotBlank()) {
-            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9))) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("OTP RECEIVED", fontSize = 12.sp, color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold)
-                    Text(
-                        otp,
-                        fontSize = 34.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF2E7D32)
-                    )
-                    OutlinedButton(onClick = { clip.setText(AnnotatedString(otp)); status = "OTP copied" }) {
-                        Text("Copy OTP")
+    if (showDomains) {
+        AlertDialog(
+            onDismissRequest = { showDomains = false },
+            title = { Text("Select Domains", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text("Choose which domains to use for email generation. Leave all off for a random one.", fontSize = 13.sp, color = Muted)
+                    DOMAIN_OPTS.forEach { d ->
+                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFF6F8FB))) {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(d.title, fontWeight = FontWeight.SemiBold)
+                                    Text(d.desc, fontSize = 12.sp, color = Muted)
+                                }
+                                Switch(
+                                    checked = sel.contains(d.key),
+                                    onCheckedChange = { on ->
+                                        sel = if (on) sel + d.key else sel - d.key
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showDomains = false
+                    generate(DOMAIN_OPTS.map { it.key }.filter { sel.contains(it) })
+                }) { Text("Generate Email") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showDomains = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    Scaffold(
+        containerColor = Color(0xFFF6F8FB),
+        topBar = {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Blue)
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("Dak Temp Mail", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
+            }
+        },
+        bottomBar = {
+            NavigationBar(containerColor = Blue) {
+                val colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = Color.White,
+                    selectedTextColor = Color.White,
+                    indicatorColor = Color(0x33FFFFFF),
+                    unselectedIconColor = Color(0xB3FFFFFF),
+                    unselectedTextColor = Color(0xB3FFFFFF)
+                )
+                NavigationBarItem(
+                    selected = tab == 0, onClick = { tab = 0 }, colors = colors,
+                    icon = { Text("✉", fontSize = 20.sp) }, label = { Text("Email") }
+                )
+                NavigationBarItem(
+                    selected = tab == 1, onClick = { tab = 1 }, colors = colors,
+                    icon = { Text("▤", fontSize = 20.sp) }, label = { Text("Inbox") }
+                )
+                NavigationBarItem(
+                    selected = tab == 2, onClick = { tab = 2 }, colors = colors,
+                    icon = { Text("⇄", fontSize = 20.sp) }, label = { Text("Switch Email") }
+                )
             }
         }
-
-        Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("YOUR ADDRESS", fontSize = 11.sp, color = Color.Gray)
-                SelectionContainer {
+    ) { pad ->
+        Column(
+            Modifier
+                .padding(pad)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            when (tab) {
+                0 -> {
                     Text(
-                        if (address.isBlank()) "Tap Generate New Address" else address,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 18.sp
+                        "Email Generator",
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center
                     )
-                }
-                Button(
-                    onClick = generate,
-                    enabled = !busy && key.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text(if (busy) "Please wait..." else "Generate New Address") }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
+                    Text(
+                        "Generate secure temporary email addresses instantly",
+                        color = Muted,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center
+                    )
+                    if (otp.isNotBlank()) {
+                        OtpCard(otp) { clip.setText(AnnotatedString(otp)); status = "OTP copied" }
+                    }
+                    Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(18.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text("CURRENT EMAIL ADDRESS", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Ink)
+                            SelectionContainer {
+                                Text(
+                                    if (address.isBlank()) "Tap Generate New Email" else address,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                    Button(
                         onClick = { clip.setText(AnnotatedString(address)); status = "Copied" },
                         enabled = address.isNotBlank(),
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Copy", fontSize = 12.sp, maxLines = 1) }
-                    OutlinedButton(
-                        onClick = {
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Copy to Clipboard") }
+                    Button(
+                        onClick = { showDomains = true },
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text(if (busy) "Please wait..." else "Generate New Email") }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        TextButton(onClick = {
                             if (address.isNotBlank() && !saved.contains(address)) {
                                 saved = saved + address
                                 saveList(prefs, "saved", saved)
                                 status = "Saved"
                             }
-                        },
-                        enabled = address.isNotBlank(),
-                        modifier = Modifier.weight(1f)
-                    ) { Text("Save", fontSize = 12.sp, maxLines = 1) }
-                    OutlinedButton(onClick = { tab = 2 }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 4.dp)) {
-                        Text("Restore", fontSize = 12.sp, maxLines = 1)
+                        }, enabled = address.isNotBlank()) { Text("Save Email") }
+                        TextButton(onClick = { tab = 2 }) { Text("Restore Email") }
+                    }
+                    if (status.isNotBlank()) {
+                        Text(status, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Muted)
                     }
                 }
-                if (status.isNotBlank()) {
-                    Text(status, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Color.Gray)
-                }
-            }
-        }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TabButton("Mailbox", tab == 0, Modifier.weight(1f)) { tab = 0 }
-            TabButton("History", tab == 1, Modifier.weight(1f)) { tab = 1 }
-            TabButton("Saved", tab == 2, Modifier.weight(1f)) { tab = 2 }
-        }
-
-        when (tab) {
-            0 -> {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("${msgs.size} messages", fontWeight = FontWeight.SemiBold)
-                    OutlinedButton(onClick = refresh) { Text(if (busy) "..." else "Reload") }
-                }
-                if (msgs.isEmpty()) {
-                    Text(
-                        "No mail yet for this address. Checks every 15 seconds.",
-                        color = Color.Gray
-                    )
-                }
-                msgs.forEach { m ->
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { openMsg(m) }
+                1 -> {
+                    Text("Inbox", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
+                    Text(address.ifBlank { "No address yet" }, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Muted)
+                    if (otp.isNotBlank()) {
+                        OtpCard(otp) { clip.setText(AnnotatedString(otp)); status = "OTP copied" }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(m.subject, fontWeight = FontWeight.Medium, maxLines = 1)
-                            Text(m.from, fontSize = 13.sp, color = Color.Gray, maxLines = 1)
-                        }
+                        Text("${msgs.size} messages", fontWeight = FontWeight.SemiBold)
+                        OutlinedButton(onClick = refresh) { Text(if (busy) "..." else "Reload") }
                     }
-                }
-                val o = opened
-                if (o != null) {
-                    Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(o.subject, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                            Text("From: " + o.from, fontSize = 12.sp, color = Color.Gray, fontFamily = FontFamily.Monospace)
-                            SelectionContainer {
-                                Text(openedText.ifBlank { "(No text found in this mail)" })
+                    if (msgs.isEmpty()) {
+                        Text("No mail yet for this address. Checks every 15 seconds.", color = Muted)
+                    }
+                    msgs.forEach { m ->
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { openMsg(m) }
+                        ) {
+                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(m.subject, fontWeight = FontWeight.Medium, maxLines = 1)
+                                Text(m.from, fontSize = 13.sp, color = Muted, maxLines = 1)
                             }
-                            OutlinedButton(onClick = { opened = null }) { Text("Close") }
                         }
                     }
-                }
-            }
-
-            1 -> {
-                if (history.isEmpty()) Text("No history yet.", color = Color.Gray)
-                history.forEach { a ->
-                    AddrRow(a, a == address, { useAddress(a) }, null)
-                }
-            }
-
-            else -> {
-                OutlinedTextField(
-                    value = restoreInput,
-                    onValueChange = { restoreInput = it },
-                    label = { Text("Paste an old address here") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Button(
-                    onClick = {
-                        val a = restoreInput.trim()
-                        if (a.contains("@")) {
-                            useAddress(a)
-                            restoreInput = ""
-                            status = "Address restored"
+                    val o = opened
+                    if (o != null) {
+                        Card(colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(o.subject, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                Text("From: " + o.from, fontSize = 12.sp, color = Muted, fontFamily = FontFamily.Monospace)
+                                SelectionContainer {
+                                    Text(openedText.ifBlank { "(No text found in this mail)" })
+                                }
+                                OutlinedButton(onClick = { opened = null }) { Text("Close") }
+                            }
                         }
-                    },
-                    enabled = restoreInput.contains("@"),
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("Restore") }
-                if (saved.isEmpty()) Text("No saved addresses. Tap Save above.", color = Color.Gray)
-                saved.forEach { a ->
-                    AddrRow(a, a == address, { useAddress(a) }, {
-                        saved = saved.filter { it != a }
-                        saveList(prefs, "saved", saved)
-                    })
+                    }
+                    if (status.isNotBlank()) {
+                        Text(status, fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = Muted)
+                    }
+                }
+
+                else -> {
+                    Text("Switch Email", fontSize = 26.sp, fontWeight = FontWeight.ExtraBold)
+                    OutlinedTextField(
+                        value = restoreInput,
+                        onValueChange = { restoreInput = it },
+                        label = { Text("Paste an old address here") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Button(
+                        onClick = {
+                            val a = restoreInput.trim()
+                            if (a.contains("@")) {
+                                useAddress(a)
+                                restoreInput = ""
+                                status = "Address restored"
+                            }
+                        },
+                        enabled = restoreInput.contains("@"),
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Restore Email") }
+                    Text("Saved", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                    if (saved.isEmpty()) Text("No saved addresses. Tap Save Email on the Email tab.", color = Muted)
+                    saved.forEach { a ->
+                        AddrRow(a, a == address, { useAddress(a) }, {
+                            saved = saved.filter { it != a }
+                            saveList(prefs, "saved", saved)
+                        })
+                    }
+                    Text("History", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                    if (history.isEmpty()) Text("No history yet.", color = Muted)
+                    history.forEach { a ->
+                        AddrRow(a, a == address, { useAddress(a) }, null)
+                    }
                 }
             }
         }
